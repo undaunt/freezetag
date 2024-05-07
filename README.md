@@ -324,7 +324,7 @@ Changelog
 ### [1.0.0] - 2020-04-06
 * Initial release
 
-[1.3.1]: https://github.com/x1ppy/freezetag/compare/1.2.1...undaunt:freezetag:1.3.0
+[1.3.1]: https://github.com/undaunt/freezetag/compare/1.3.0...1.3.1
 [1.3.0]: https://github.com/x1ppy/freezetag/compare/1.2.1...undaunt:freezetag:1.3.0
 [1.2.1]: https://github.com/x1ppy/freezetag/compare/1.2.0...1.2.1
 [1.2.0]: https://github.com/x1ppy/freezetag/compare/1.1.1...1.2.0
