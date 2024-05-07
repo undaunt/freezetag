@@ -111,7 +111,9 @@ class FreezeFS(Operations, FileSystemEventHandler):
         else:
             # Use the default path if no db_path is provided
             self.db_path = CACHE_DIR / 'freezefs.db'
-        
+
+        # Ensure the directory for the database exists
+        self.db_path.parent.mkdir(parents=True, exist_ok=True)
         self.checksum_db = ChecksumDB(self.db_path)
 
         # self.freezetag_ref_lock must be acquired before accessing.
@@ -141,8 +143,9 @@ class FreezeFS(Operations, FileSystemEventHandler):
         }
 
     def mount(self, directory, mount_point):
-        db_dir = self.db_file.parent
-        db_dir.mkdir(parents=True, exist_ok=True)
+        db_path = Path(self.db_path)  # Ensure db_path is a Path object
+        db_dir = db_path.parent
+        db_dir.mkdir(parents=True, exist_ok=True)  # Ensure the directory exists
 
         observer = Observer()
         observer.schedule(self, directory, recursive=True)
