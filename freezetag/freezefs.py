@@ -414,11 +414,11 @@ class FreezeFS(Operations, FileSystemEventHandler):
                     break
 
         # Determine the mode based on flags
-        mode = 'r'
+        mode = 'rb'  # Default to binary read mode
         if flags & os.O_WRONLY:
-            mode = 'w'
+            mode = 'wb'  # Binary write mode
         elif flags & os.O_RDWR:
-            mode = 'r+'
+            mode = 'r+b'  # Binary read/write mode
 
         # Open the file and get a file descriptor
         os_fh = os.open(file_entry.path, flags)
