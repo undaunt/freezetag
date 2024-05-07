@@ -294,6 +294,9 @@ If you use a custom naming scheme for your freezetags (by passing `--ftag` to `f
 
 Changelog
 ---------
+### [1.3.0] - 2024-05-07
+* Added `--db-path` option for relocating mount database
+* Pulled [@CoordSpace](https://github.com/CoordSpace)'s volname & FUSE support fix - fixes Linux support for mount.
 ### [1.2.1] - 2021-04-21
 * Fixed `--json` flag for `show`
 * Fixed file monitoring for failed stat
