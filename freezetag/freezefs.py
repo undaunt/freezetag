@@ -413,10 +413,16 @@ class FreezeFS(Operations, FileSystemEventHandler):
                     metadata = f.metadata
                     break
 
+        # Determine the mode based on flags
+        mode = 'r'
+        if flags & os.O_WRONLY:
+            mode = 'w'
+        elif flags & os.O_RDWR:
+            mode = 'r+'
+
         # Open the file and get a file descriptor
         os_fh = os.open(file_entry.path, flags)
         # Convert file descriptor to a file object
-        mode = 'r+b' if 'b' in flags else 'r+' if 'w' in flags else 'r'
         file_obj = os.fdopen(os_fh, mode)
         self.fh_map[os_fh] = (file_obj, freezetag_path)
         return os_fh
