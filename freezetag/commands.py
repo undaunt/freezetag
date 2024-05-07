@@ -427,4 +427,4 @@ def show(path, as_json, **kwargs):
 
 def mount(directory, mount_point, verbose, db_path=None, **kwargs):
     from .freezefs import FreezeFS
-    FreezeFS(verbose).mount(directory, mount_point, db_path)
+    FreezeFS(verbose, db_path=db_path).mount(directory, mount_point)
