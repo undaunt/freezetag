@@ -66,6 +66,7 @@ def parse_args():
                             '\nEg: $HOME/.cache/freezetag/freezedb.fs.'
                             '\nIf a directory is specified, the default name remains.'
                             '\nOtherwise, a custom directory and filename will be respected.')
+    mount.add_argument('--write-dir', '-wd', action='store_true', help='Redirect writes to source.')
 
     shave = add_subparser('shave', 'Strip metadata from all music files.',
                           '\n\nOnly music files with supported extensions (.mp3, .flac) will be modified,'
