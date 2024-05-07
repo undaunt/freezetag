@@ -100,12 +100,19 @@ class FreezeFS(Operations, FileSystemEventHandler):
         self.fh_map = {}
         self.checksum_db = ChecksumDB(CACHE_DIR / 'freezefs.db')
         self.verbose = verbose
+        self.db_path = db_path  # Store the provided database path
 
-        # self.freezetag_ref_lock must be acquired before accessing.
-        self.freezetag_cache = PoliteLRUCache(Freezetag.from_path, self._can_purge_ftag, FREEZETAG_CACHE_LIMIT)
+        # Determine the database file location
+        if self.db_path:
+            db_path = Path(self.db_path)
+            if db_path.is_dir():
+                self.db_file = db_path / 'freezefs.db'  # Default db file in the specified directory
+            else:
+                self.db_file = db_path  # Specific db file
+        else:
+            self.db_file = CACHE_DIR / 'freezefs.db'  # Default location
 
-        # self.freezetag_ref_lock must be acquired before accessing.
-        self.freezetag_refs = {}
+        self.checksum_db = ChecksumDB(self.db_file)
 
         now = time.time()
 
@@ -127,17 +134,26 @@ class FreezeFS(Operations, FileSystemEventHandler):
             'st_uid': uid,
         }
 
+        # self.freezetag_ref_lock must be acquired before accessing.
+        self.freezetag_cache = PoliteLRUCache(Freezetag.from_path, self._can_purge_ftag, FREEZETAG_CACHE_LIMIT)
+
+        # self.freezetag_ref_lock must be acquired before accessing.
+        self.freezetag_refs = {}
+
     def mount(self, directory, mount_point):
-        CACHE_DIR.mkdir(parents=True, exist_ok=True)
+        db_dir = self.db_file.parent
+        db_dir.mkdir(parents=True, exist_ok=True)
 
         observer = Observer()
         observer.schedule(self, directory, recursive=True)
         observer.start()
 
-        print(f'scanning {directory} for files and freezetags...')
-
+        print(f"Scanning {directory} for files and freezetags...")
         for path in walk_dir(directory):
-            (self._add_ftag if path.suffix.lower() == '.ftag' else self._add_file)(path)
+            if path.suffix.lower() == '.ftag':
+                self._add_ftag(path)
+            else:
+                self._add_file(path)
         self.checksum_db.flush()
 
         print(f'mounting {mount_point}')
