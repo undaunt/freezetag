@@ -294,9 +294,10 @@ If you use a custom naming scheme for your freezetags (by passing `--ftag` to `f
 
 Changelog
 ---------
+### [1.3.1] - 2024-05-07
+* Pulled [@CoordSpace](https://github.com/CoordSpace)'s volname & FUSE support fix - fixes Linux support for mount.
 ### [1.3.0] - 2024-05-07
 * Added `--db-path` option for relocating mount database
-* Pulled [@CoordSpace](https://github.com/CoordSpace)'s volname & FUSE support fix - fixes Linux support for mount.
 ### [1.2.1] - 2021-04-21
 * Fixed `--json` flag for `show`
 * Fixed file monitoring for failed stat
@@ -323,6 +324,8 @@ Changelog
 ### [1.0.0] - 2020-04-06
 * Initial release
 
+[1.3.1]: https://github.com/x1ppy/freezetag/compare/1.2.1...undaunt:freezetag:1.3.0
+[1.3.0]: https://github.com/x1ppy/freezetag/compare/1.2.1...undaunt:freezetag:1.3.0
 [1.2.1]: https://github.com/x1ppy/freezetag/compare/1.2.0...1.2.1
 [1.2.0]: https://github.com/x1ppy/freezetag/compare/1.1.1...1.2.0
 [1.1.1]: https://github.com/x1ppy/freezetag/compare/1.1.0...1.1.1
