@@ -426,6 +426,8 @@ def show(path, as_json, **kwargs):
             print(f'{f.checksum.hex()} {f.path}')
 
 
-def mount(directory, mount_point, verbose, **kwargs):
+def mount(directory, mount_point, verbose, write_dir=None, **kwargs):
     from .freezefs import FreezeFS
-    FreezeFS(verbose).mount(directory, mount_point)
+    if write_dir:
+        print(f"Write redirection is enabled to {write_dir}")
+    FreezeFS(verbose, write_dir=write_dir).mount(directory, mount_point)

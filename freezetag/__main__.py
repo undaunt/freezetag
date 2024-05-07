@@ -60,6 +60,8 @@ def parse_args():
                             '\na few seconds.')
     mount.add_argument('--verbose', '-v', action='store_true', help='Verbose mode.')
     mount.add_argument('mount_point', help='Mount destination.')
+    mount.add_argument('--write-dir', '-wd', action='store_true', help='Redirect writes to source.')
+
 
     shave = add_subparser('shave', 'Strip metadata from all music files.',
                           '\n\nOnly music files with supported extensions (.mp3, .flac) will be modified,'
