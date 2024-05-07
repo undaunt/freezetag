@@ -197,6 +197,10 @@ Mounts are read-only. Mounts are "live", meaning new files added to the source d
 the mount point (assuming there's a matching freezetag), and deleted files will automatically disappear. Similarly,
 changes in tags or freezetag files will be reflected automatically.
 
+A custom location or path may be specified for the database via --db-path. The default location is the local user's
+cache dir. For example, on Debian this would be $HOME/.cache/freezetag/freezefs.db. If a custom folder is specified
+the default name of freezefs.db will still be used. If a custom filename is specified, that will be used.
+
 Note: The initial mount may take awhile depending on how large your library is. Mount metadata is cached on disk, so
 subsequent mounts should activate in just a few seconds.
 

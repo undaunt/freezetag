@@ -88,9 +88,8 @@ class FrozenItem:
         self.freezetags = []
         self.files = []
 
-
 class FreezeFS(Operations, FileSystemEventHandler):
-    def __init__(self, verbose=False):
+    def __init__(self, verbose=False, db_path=None):
         self.path_map = {Path('/').root: {}}
         self.checksum_map = {}
         self.abs_path_map = {}
@@ -98,8 +97,24 @@ class FreezeFS(Operations, FileSystemEventHandler):
         self.inactive_freezetags = []
         self.freezetag_ref_lock = Lock()
         self.fh_map = {}
-        self.checksum_db = ChecksumDB(CACHE_DIR / 'freezefs.db')
         self.verbose = verbose
+
+        # Determine the path for the database
+        if db_path:
+            db_path = Path(db_path)
+            if db_path.is_dir():
+                # If db_path is a directory, append the default database filename
+                self.db_path = db_path / 'freezefs.db'
+            else:
+                # If db_path is a file, use it directly
+                self.db_path = db_path
+        else:
+            # Use the default path if no db_path is provided
+            self.db_path = CACHE_DIR / 'freezefs.db'
+
+        # Ensure the directory for the database exists
+        self.db_path.parent.mkdir(parents=True, exist_ok=True)
+        self.checksum_db = ChecksumDB(self.db_path)
 
         # self.freezetag_ref_lock must be acquired before accessing.
         self.freezetag_cache = PoliteLRUCache(Freezetag.from_path, self._can_purge_ftag, FREEZETAG_CACHE_LIMIT)
@@ -128,16 +143,20 @@ class FreezeFS(Operations, FileSystemEventHandler):
         }
 
     def mount(self, directory, mount_point):
-        CACHE_DIR.mkdir(parents=True, exist_ok=True)
+        db_path = Path(self.db_path)  # Ensure db_path is a Path object
+        db_dir = db_path.parent
+        db_dir.mkdir(parents=True, exist_ok=True)  # Ensure the directory exists
 
         observer = Observer()
         observer.schedule(self, directory, recursive=True)
         observer.start()
 
-        print(f'scanning {directory} for files and freezetags...')
-
+        print(f"Scanning {directory} for files and freezetags...")
         for path in walk_dir(directory):
-            (self._add_ftag if path.suffix.lower() == '.ftag' else self._add_file)(path)
+            if path.suffix.lower() == '.ftag':
+                self._add_ftag(path)
+            else:
+                self._add_file(path)
         self.checksum_db.flush()
 
         print(f'mounting {mount_point}')
