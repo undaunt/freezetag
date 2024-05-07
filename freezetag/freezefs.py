@@ -428,7 +428,9 @@ class FreezeFS(Operations, FileSystemEventHandler):
         return os_fh
 
     def read(self, path, length, offset, fh):
-        return self.fh_map[fh][0].read(length, offset)
+        file_obj = self.fh_map[fh][0]
+        file_obj.seek(offset)  # Move to the correct offset
+        return file_obj.read(length)  # Read the specified number of bytes
 
     def release(self, path, fh):
         try:
