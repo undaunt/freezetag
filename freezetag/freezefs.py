@@ -88,9 +88,8 @@ class FrozenItem:
         self.freezetags = []
         self.files = []
 
-
 class FreezeFS(Operations, FileSystemEventHandler):
-    def __init__(self, verbose=False):
+    def __init__(self, verbose=False, db_path=None):
         self.path_map = {Path('/').root: {}}
         self.checksum_map = {}
         self.abs_path_map = {}
@@ -98,21 +97,28 @@ class FreezeFS(Operations, FileSystemEventHandler):
         self.inactive_freezetags = []
         self.freezetag_ref_lock = Lock()
         self.fh_map = {}
-        self.checksum_db = ChecksumDB(CACHE_DIR / 'freezefs.db')
         self.verbose = verbose
-        self.db_path = db_path  # Store the provided database path
 
-        # Determine the database file location
-        if self.db_path:
-            db_path = Path(self.db_path)
+        # Determine the path for the database
+        if db_path:
+            db_path = Path(db_path)
             if db_path.is_dir():
-                self.db_file = db_path / 'freezefs.db'  # Default db file in the specified directory
+                # If db_path is a directory, append the default database filename
+                self.db_path = db_path / 'freezefs.db'
             else:
-                self.db_file = db_path  # Specific db file
+                # If db_path is a file, use it directly
+                self.db_path = db_path
         else:
-            self.db_file = CACHE_DIR / 'freezefs.db'  # Default location
+            # Use the default path if no db_path is provided
+            self.db_path = CACHE_DIR / 'freezefs.db'
+        
+        self.checksum_db = ChecksumDB(self.db_path)
 
-        self.checksum_db = ChecksumDB(self.db_file)
+        # self.freezetag_ref_lock must be acquired before accessing.
+        self.freezetag_cache = PoliteLRUCache(Freezetag.from_path, self._can_purge_ftag, FREEZETAG_CACHE_LIMIT)
+
+        # self.freezetag_ref_lock must be acquired before accessing.
+        self.freezetag_refs = {}
 
         now = time.time()
 
@@ -133,12 +139,6 @@ class FreezeFS(Operations, FileSystemEventHandler):
             'st_gid': gid,
             'st_uid': uid,
         }
-
-        # self.freezetag_ref_lock must be acquired before accessing.
-        self.freezetag_cache = PoliteLRUCache(Freezetag.from_path, self._can_purge_ftag, FREEZETAG_CACHE_LIMIT)
-
-        # self.freezetag_ref_lock must be acquired before accessing.
-        self.freezetag_refs = {}
 
     def mount(self, directory, mount_point):
         db_dir = self.db_file.parent
