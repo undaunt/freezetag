@@ -5,6 +5,7 @@ import os
 import platform
 import sys
 import time
+import errno
 from collections import OrderedDict
 from errno import ENOENT
 from pathlib import Path
@@ -90,7 +91,7 @@ class FrozenItem:
 
 
 class FreezeFS(Operations, FileSystemEventHandler):
-    def __init__(self, verbose=False):
+    def __init__(self, verbose=False, write_dir=False):
         self.path_map = {Path('/').root: {}}
         self.checksum_map = {}
         self.abs_path_map = {}
@@ -100,6 +101,8 @@ class FreezeFS(Operations, FileSystemEventHandler):
         self.fh_map = {}
         self.checksum_db = ChecksumDB(CACHE_DIR / 'freezefs.db')
         self.verbose = verbose
+        self.directory = None
+        self.write_dir = write_dir
 
         # self.freezetag_ref_lock must be acquired before accessing.
         self.freezetag_cache = PoliteLRUCache(Freezetag.from_path, self._can_purge_ftag, FREEZETAG_CACHE_LIMIT)
@@ -128,14 +131,16 @@ class FreezeFS(Operations, FileSystemEventHandler):
         }
 
     def mount(self, directory, mount_point):
-        CACHE_DIR.mkdir(parents=True, exist_ok=True)
+        self.directory = directory  # Ensure this is correctly capturing the intended directory
+        print(f"Directory set to: {self.directory}")  # Debug: Confirm the directory is set correctly
 
+        # Other initialization and setup...
+        CACHE_DIR.mkdir(parents=True, exist_ok=True)
         observer = Observer()
         observer.schedule(self, directory, recursive=True)
         observer.start()
 
         print(f'scanning {directory} for files and freezetags...')
-
         for path in walk_dir(directory):
             (self._add_ftag if path.suffix.lower() == '.ftag' else self._add_file)(path)
         self.checksum_db.flush()
@@ -307,6 +312,32 @@ class FreezeFS(Operations, FileSystemEventHandler):
     # Filesystem methods
     # ==================
 
+    def create(self, path, mode, fi=None):
+        if not self.write_dir:
+            raise FuseOSError(errno.EROFS)  # Read-only file system error
+
+        # Use the instance variable for directory
+        actual_path = os.path.join(self.directory, path.lstrip('/'))
+        fh = os.open(actual_path, os.O_CREAT | os.O_WRONLY, mode)
+        
+        # Convert the file descriptor to a file object for further operations
+        file_obj = os.fdopen(fh, 'w+')  # 'w+' mode opens the file for both reading and writing
+        self.fh_map[fh] = (file_obj, None)  # Store the file object and path in fh_map
+        return fh
+
+    def write(self, path, data, offset, fh):
+        if not self.write_dir:
+            raise FuseOSError(errno.EROFS)  # Read-only file system error
+
+        # Retrieve the file object from fh_map using the file handle
+        file_obj, _ = self.fh_map.get(fh, (None, None))
+        if file_obj is None:
+            raise FuseOSError(errno.EBADF)  # Bad file descriptor error
+
+        # Perform the write operation
+        file_obj.seek(offset)  # Move to the correct offset
+        return file_obj.write(data)  # Write data and return the number of bytes written
+
     def getattr(self, path, fh=None):
         path = Path(path)
 
@@ -352,7 +383,6 @@ class FreezeFS(Operations, FileSystemEventHandler):
         if not item:
             raise FuseOSError(ENOENT)
 
-        # As long as the raw checksum matches, any file should work, so just use the first one we have.
         file_entry = item.files[0]
 
         frozen_entry = None
@@ -383,27 +413,49 @@ class FreezeFS(Operations, FileSystemEventHandler):
                     metadata = f.metadata
                     break
 
-        file = FuseFile.from_info(file_entry.path, flags, metadata, file_entry.metadata_info, file_entry.metadata_len,
-                                  frozen_entry.metadata_len)
-        self.fh_map[file.fh] = (file, freezetag_path)
-        return file.fh
+        # Open the file and get a file descriptor
+        os_fh = os.open(file_entry.path, flags)
+        # Convert file descriptor to a file object
+        mode = 'r+b' if 'b' in flags else 'r+' if 'w' in flags else 'r'
+        file_obj = os.fdopen(os_fh, mode)
+        self.fh_map[os_fh] = (file_obj, freezetag_path)
+        return os_fh
 
     def read(self, path, length, offset, fh):
         return self.fh_map[fh][0].read(length, offset)
 
     def release(self, path, fh):
-        f, freezetag_path = self.fh_map[fh]
+        try:
+            if fh not in self.fh_map:
+                self._log_verbose(f"File handle {fh} not found for release")
+                raise FuseOSError(errno.EINVAL)  # Handle not found
 
-        if freezetag_path:
-            self.freezetag_ref_lock.acquire()
-            try:
-                self.freezetag_refs[freezetag_path][1] -= 1
-                self._schedule_purge_ftag(freezetag_path)
-            finally:
-                self.freezetag_ref_lock.release()
+            file_obj, freezetag_path = self.fh_map.pop(fh, (None, None))
+            if file_obj is None:
+                self._log_verbose(f"No file object found for file handle {fh}")
+                raise FuseOSError(errno.EINVAL)  # Handle not found
 
-        del self.fh_map[fh]
-        return f.close()
+            # Close the file object if it's valid
+            if hasattr(file_obj, 'close'):
+                file_obj.close()
+            else:
+                self._log_verbose(f"Object associated with file handle {fh} is not closable. Type: {type(file_obj)}")
+
+            # Handle freezetag path reference counting
+            if freezetag_path:
+                self.freezetag_ref_lock.acquire()
+                try:
+                    if freezetag_path in self.freezetag_refs:
+                        self.freezetag_refs[freezetag_path][1] -= 1
+                        if self.freezetag_refs[freezetag_path][1] <= 0:
+                            self._schedule_purge_ftag(freezetag_path)
+                finally:
+                    self.freezetag_ref_lock.release()
+
+        except Exception as e:
+            self._log_verbose(f"Error releasing file handle {fh}: {str(e)}")
+            raise FuseOSError(errno.EIO)  # General I/O error for any exceptions
+
 
     # watchdog observers
     # ==================
