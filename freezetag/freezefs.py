@@ -117,6 +117,14 @@ class FreezeFS(Operations, FileSystemEventHandler):
             # Use the default path if no db_path is provided
             self.db_path = CACHE_DIR / 'freezefs.db'
 
+        try:
+            self.gid = os.getgid()
+            self.uid = os.getuid()
+        except:
+            # Windows.
+            self.gid = 0
+            self.uid = 0
+
         # Ensure the directory for the database exists
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
         self.checksum_db = ChecksumDB(self.db_path)
@@ -129,22 +137,14 @@ class FreezeFS(Operations, FileSystemEventHandler):
 
         now = time.time()
 
-        try:
-            gid = os.getgid()
-            uid = os.getuid()
-        except:
-            # Windows.
-            gid = 0
-            uid = 0
-
         dir_stat_items = {
             'st_atime': now,
             'st_ctime': now,
             'st_mtime': now,
             'st_mode': S_IFDIR | 0o755,
             'st_nlink': 2,
-            'st_gid': gid,
-            'st_uid': uid,
+            'st_gid': self.gid,
+            'st_uid': self.uid,
         }
 
         if platform.system() == 'Darwin':
@@ -152,7 +152,12 @@ class FreezeFS(Operations, FileSystemEventHandler):
 
         self.dir_stat = dir_stat_items
 
+        print(f"Initial dir_stat: {self.dir_stat}")
+
     def mount(self, directory, mount_point):
+        if not directory:
+            raise ValueError("Directory path must be provided")
+        self.directory = directory
         db_path = Path(self.db_path)  # Ensure db_path is a Path object
         db_dir = db_path.parent
         db_dir.mkdir(parents=True, exist_ok=True)  # Ensure the directory exists
@@ -173,10 +178,18 @@ class FreezeFS(Operations, FileSystemEventHandler):
 
         print(f'mounting {mount_point}')
 
-        fuse_args = {'nothreads': True, 'foreground': True, 'fsname': 'freezefs', 
-                    'volname': Path(mount_point).name}
+        fuse_args = {
+            'nothreads': True,
+            'foreground': True,
+            'fsname': 'freezefs',
+            'volname': Path(mount_point).name  # Keep this if on Darwin
+        }
 
-        # Only MacOS supports FUSE volume names, so remove it for other FS to prevent RuntimeError
+        # Add uid and gid to the fuse arguments
+        fuse_args['uid'] = self.uid
+        fuse_args['gid'] = self.gid
+
+        # macOS specific option, remove 'volname' if not on Darwin
         if platform.system() != 'Darwin':
             del fuse_args['volname']
     
@@ -301,9 +314,34 @@ class FreezeFS(Operations, FileSystemEventHandler):
         self.checksum_db.add(st.st_dev, st.st_ino, st.st_mtime, checksum, metadata_info, metadata_len)
         self._add_path_entry(checksum, entry)
 
+    def _find_ftag(self, path):
+        """
+        Recursively search for an .ftag file starting from the given path and moving upwards.
+        Returns the path to the .ftag file if found, otherwise None.
+        """
+        current_path = Path(path)
+        while current_path != current_path.parent:  # Stop when reaching the root directory
+            ftag_files = list(current_path.glob('*.ftag'))
+            if ftag_files:
+                return ftag_files[0]  # Return the first .ftag file found
+            current_path = current_path.parent
+        return None
+
     def _handle_frozen_file(self, src, ftag_path):
-        # Logic to handle frozen files based on .ftag
         print(f'Handling frozen file: {src} with .ftag: {ftag_path}')
+        
+        # Assuming parse_ftag is a function that parses the .ftag file and returns a dictionary of settings
+        try:
+            with open(ftag_path, 'r') as file:
+                ftag_data = parse_ftag(file)
+            
+            # Example of using parsed data - adjust visibility or access based on .ftag settings
+            if 'root' in ftag_data:
+                # Implement logic based on the root or other settings
+                print(f"Root directory specified in .ftag: {ftag_data['root']}")
+                # Additional logic to handle files according to .ftag specifications
+        except Exception as e:
+            print(f"Failed to handle .ftag file {ftag_path}: {str(e)}")
 
     def _delete_if_dangling(self, item, fuse_path, file_path):
         if self.transparent and any(Path(fuse_path).with_suffix('.ftag').exists() for entry in item.freezetags if entry.path == fuse_path):
@@ -387,8 +425,9 @@ class FreezeFS(Operations, FileSystemEventHandler):
             except IOError:
                 raise FuseOSError(errno.EBADF)  # Handle file open errors
 
-        file_obj.seek(offset)
-        return file_obj.write(data)
+            # Update the modification time
+            self.dir_stat['st_mtime'] = time.time()
+            return bytes_written
 
     def rename(self, old, new):
         if not self.transparent:
@@ -414,44 +453,63 @@ class FreezeFS(Operations, FileSystemEventHandler):
         self._log_verbose(f"File {path} deleted")
 
     def getattr(self, path, fh=None):
-        path = Path(path)
+        self._log_verbose(f"Getting attributes for: {path}")
 
-        if self.transparent:
-            ftag_path = path.with_suffix('.ftag')
-            if ftag_path.exists():
-                # Handle as frozen file if .ftag exists
-                return self._get_frozen_attr(path)
-            else:
-                # Handle as regular file if no .ftag file is associated
-                return os.lstat(os.path.join(self.directory, path.lstrip('/')))
+        # Handle the root path separately
+        if path == Path('/'):
+            attrs = {
+                'st_mode': (S_IFDIR | 0o755),
+                'st_ctime': time.time(),
+                'st_mtime': time.time(),
+                'st_atime': time.time(),
+                'st_nlink': 2
+            }
+            return attrs
 
-        item = self._get_item(path)
-        if item == None:
+        # Attempt to find and handle .ftag file
+        ftag_path = self._find_ftag(path)
+        if ftag_path:
+            self._log_verbose(f"Found .ftag for {path}, handling as frozen file")
+            try:
+                # Simulate adding .ftag to leverage its parsing and handling logic
+                self._add_ftag(ftag_path)
+                # Fetch the item after it has been processed
+                item = self._get_item(path)
+                if item:
+                    return {
+                        'st_mode': item.mode,
+                        'st_ctime': item.ctime,
+                        'st_mtime': item.mtime,
+                        'st_atime': item.atime,
+                        'st_nlink': item.nlink,
+                        'st_uid': item.uid,
+                        'st_gid': item.gid,
+                        'st_size': item.size,
+                    }
+            except Exception as e:
+                self._log_verbose(f"Failed to handle .ftag file {ftag_path}: {str(e)}")
+                raise FuseOSError(ENOENT)  # No entry error if handling fails
+
+        # Handle as regular file if no .ftag file is associated or not in transparent mode
+        try:
+            attrs = os.lstat(os.path.join(self.directory, str(path).lstrip('/')))
+            return {
+                'st_mode': attrs.st_mode,
+                'st_ctime': attrs.st_ctime,
+                'st_mtime': attrs.st_mtime,
+                'st_atime': attrs.st_atime,
+                'st_nlink': attrs.st_nlink,
+                'st_size': attrs.st_size,
+                'st_uid': attrs.st_uid,
+                'st_gid': attrs.st_gid
+            }
+        except FileNotFoundError:
+            self._log_verbose(f"No file found for path: {path}")
             raise FuseOSError(ENOENT)
-
-        if isinstance(item, FrozenItem):
-            if not len(item.freezetags) or not len(item.files):
-                raise FuseOSError(ENOENT)
-
-            file_entry = item.files[0]
-            frozen_entry = None
-            for entry in item.freezetags:
-                if entry.path == path:
-                    frozen_entry = entry
-                    break
-
-            if not frozen_entry:
-                raise FuseOSError(ENOENT)
-
-            st = file_entry.path.stat()
-            d = {key: getattr(st, key) for key in ST_ITEMS}
-            d['st_size'] += frozen_entry.metadata_len - file_entry.metadata_len
-            return d
-
-        return self.dir_stat
 
     def readdir(self, path, fh):
         path = Path(path)
+        self._log_verbose(f"Listing directory: {path}")
         yield '.'
         yield '..'
 
@@ -459,24 +517,28 @@ class FreezeFS(Operations, FileSystemEventHandler):
             # In transparent mode, list both regular and frozen files
             try:
                 # List all files in the directory
-                all_files = os.listdir(os.path.join(self.directory, path.lstrip('/')))
+                all_files = os.listdir(os.path.join(self.directory, str(path).lstrip('/')))
                 # Filter out files that have a corresponding .ftag file
                 frozen_files = {f[:-5] for f in all_files if f.endswith('.ftag')}
                 regular_files = {f for f in all_files if not f.endswith('.ftag')}
 
                 # Yield all regular files and files with .ftag as frozen versions
                 for file in regular_files.union(frozen_files):
+                    self._log_verbose(f"Yielding file: {file}")
                     yield file
             except FileNotFoundError:
+                self._log_verbose(f"Directory not found: {path}")
                 raise FuseOSError(ENOENT)
         else:
             # Non-transparent mode: use existing logic
             item = self._get_item(path)
             if item is None:
+                self._log_verbose(f"No item found for path: {path}")
                 raise FuseOSError(ENOENT)
             for name, sub_item in item.items():
                 if isinstance(sub_item, FrozenItem) and (not len(sub_item.freezetags) or not len(sub_item.files)):
                     continue
+                self._log_verbose(f"Yielding sub-item: {name}")
                 yield name
 
     # File methods
