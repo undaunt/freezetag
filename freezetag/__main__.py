@@ -61,11 +61,9 @@ def parse_args():
     mount.add_argument('--verbose', '-v', action='store_true', help='Verbose mode.')
     mount.add_argument('mount_point', help='Mount destination.')
     mount.add_argument('--db-path', type=str, default=None,
-                       help='Optional custom path to store the freezetag database file.'
-                            '\nIf not specified, the default user cache location is used.'
-                            '\nEg: $HOME/.cache/freezetag/freezedb.fs.'
-                            '\nIf a directory is specified, the default name remains.'
-                            '\nOtherwise, a custom directory and filename will be respected.')
+                       help='Custom path to store the freezetag database file. If not specified it defaults'
+                            '\nto $HOME/.cache/freezetag/freezedb.fs or equivalent user cache location.'
+                            '\nWhen specifying only a custom directory, the db will still be named freezedb.fs.'
 
     shave = add_subparser('shave', 'Strip metadata from all music files.',
                           '\n\nOnly music files with supported extensions (.mp3, .flac) will be modified,'
