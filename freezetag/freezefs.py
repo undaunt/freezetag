@@ -92,7 +92,7 @@ class FrozenItem:
         self.files = []
 
 class FreezeFS(Operations, FileSystemEventHandler):
-    def __init__(self, verbose=False, db_path=None, write_dir=False):
+    def __init__(self, verbose=False, db_path=None, transparent=False):
         self.path_map = {Path('/').root: {}}
         self.checksum_map = {}
         self.abs_path_map = {}
@@ -102,7 +102,7 @@ class FreezeFS(Operations, FileSystemEventHandler):
         self.fh_map = {}
         self.verbose = verbose
         self.directory = None
-        self.write_dir = write_dir
+        self.transparent = transparent  # New attribute to handle transparent mode
 
         # Determine the path for the database
         if db_path:
@@ -260,6 +260,14 @@ class FreezeFS(Operations, FileSystemEventHandler):
             freezetag_map[1].append(state.checksum)
 
     def _add_file(self, src):
+        if self.transparent:
+            ftag_path = src.with_suffix('.ftag')
+            if ftag_path.exists():
+                # Handle as frozen file if .ftag exists
+                self._handle_frozen_file(src, ftag_path)
+                return
+
+        # Existing code for handling regular files
         try:
             st = src.stat()
         except:
@@ -293,7 +301,14 @@ class FreezeFS(Operations, FileSystemEventHandler):
         self.checksum_db.add(st.st_dev, st.st_ino, st.st_mtime, checksum, metadata_info, metadata_len)
         self._add_path_entry(checksum, entry)
 
+    def _handle_frozen_file(self, src, ftag_path):
+        # Logic to handle frozen files based on .ftag
+        print(f'Handling frozen file: {src} with .ftag: {ftag_path}')
+
     def _delete_if_dangling(self, item, fuse_path, file_path):
+        if self.transparent and any(Path(fuse_path).with_suffix('.ftag').exists() for entry in item.freezetags if entry.path == fuse_path):
+            return  # Skip deletion if any related .ftag files exist
+
         if not len(item.freezetags) and not len(item.files):
             del self.checksum_map[item.checksum]
 
@@ -348,10 +363,9 @@ class FreezeFS(Operations, FileSystemEventHandler):
     # ==================
 
     def create(self, path, mode, fi=None):
-        if not self.write_dir:
+        if not self.transparent:
             raise FuseOSError(errno.EROFS)  # Read-only file system error
 
-        # Use the instance variable for directory
         actual_path = os.path.join(self.directory, path.lstrip('/'))
         fh = os.open(actual_path, os.O_CREAT | os.O_WRONLY, mode)
         
@@ -361,7 +375,7 @@ class FreezeFS(Operations, FileSystemEventHandler):
         return fh
 
     def write(self, path, data, offset, fh):
-        if not self.write_dir:
+        if not self.transparent:
             raise FuseOSError(errno.EROFS)  # Read-only file system error
 
         file_obj, _ = self.fh_map.get(fh, (None, None))
@@ -377,20 +391,39 @@ class FreezeFS(Operations, FileSystemEventHandler):
         return file_obj.write(data)
 
     def rename(self, old, new):
-        if not self.write_dir:
+        if not self.transparent:
             raise FuseOSError(errno.EROFS)
 
         old_path = os.path.join(self.directory, old.lstrip('/'))
         new_path = os.path.join(self.directory, new.lstrip('/'))
-        # Update fh_map to reflect new path
-        fh = next((k for k, v in self.fh_map.items() if v[1] == old_path), None)
-        if fh:
-            file_obj, _ = self.fh_map[fh]
-            self.fh_map[fh] = (file_obj, new_path)
+
+        # Check if the old file is frozen by looking for a corresponding .ftag file
+        ftag_path = Path(old_path + '.ftag')
+        if ftag_path.exists():
+            raise FuseOSError(errno.EACCES)  # Access denied error for trying to rename a frozen file
+
         os.rename(old_path, new_path)
+
+    def unlink(self, path):
+        if not self.transparent:
+            self._log_verbose(f"Attempt to delete file {path} blocked in non-transparent mode")
+            raise FuseOSError(errno.EROFS)  # Prevent deletion in non-transparent mode
+
+        actual_path = os.path.join(self.directory, path.lstrip('/'))
+        os.unlink(actual_path)
+        self._log_verbose(f"File {path} deleted")
 
     def getattr(self, path, fh=None):
         path = Path(path)
+
+        if self.transparent:
+            ftag_path = path.with_suffix('.ftag')
+            if ftag_path.exists():
+                # Handle as frozen file if .ftag exists
+                return self._get_frozen_attr(path)
+            else:
+                # Handle as regular file if no .ftag file is associated
+                return os.lstat(os.path.join(self.directory, path.lstrip('/')))
 
         item = self._get_item(path)
         if item == None:
@@ -418,18 +451,49 @@ class FreezeFS(Operations, FileSystemEventHandler):
         return self.dir_stat
 
     def readdir(self, path, fh):
+        path = Path(path)
         yield '.'
         yield '..'
-        for name, item in self._get_item(path).items():
-            if isinstance(item, FrozenItem) and (not len(item.freezetags) or not len(item.files)):
-                continue
-            yield name
+
+        if self.transparent:
+            # In transparent mode, list both regular and frozen files
+            try:
+                # List all files in the directory
+                all_files = os.listdir(os.path.join(self.directory, path.lstrip('/')))
+                # Filter out files that have a corresponding .ftag file
+                frozen_files = {f[:-5] for f in all_files if f.endswith('.ftag')}
+                regular_files = {f for f in all_files if not f.endswith('.ftag')}
+
+                # Yield all regular files and files with .ftag as frozen versions
+                for file in regular_files.union(frozen_files):
+                    yield file
+            except FileNotFoundError:
+                raise FuseOSError(ENOENT)
+        else:
+            # Non-transparent mode: use existing logic
+            item = self._get_item(path)
+            if item is None:
+                raise FuseOSError(ENOENT)
+            for name, sub_item in item.items():
+                if isinstance(sub_item, FrozenItem) and (not len(sub_item.freezetags) or not len(sub_item.files)):
+                    continue
+                yield name
 
     # File methods
     # ============
 
     def open(self, path, flags):
         path = Path(path)
+
+        if self.transparent:
+            ftag_path = path.with_suffix('.ftag')
+            if ftag_path.exists():
+                # Handle as frozen file if .ftag exists
+                return self._open_frozen_file(path, flags, ftag_path)
+            else:
+                # Handle as regular file if no .ftag file is associated
+                return self._open_regular_file(path, flags)
+
         item = self._get_item(path)
         if not item:
             raise FuseOSError(ENOENT)
@@ -476,6 +540,20 @@ class FreezeFS(Operations, FileSystemEventHandler):
         # Convert file descriptor to a file object
         file_obj = os.fdopen(os_fh, mode)
         self.fh_map[os_fh] = (file_obj, freezetag_path)
+        return os_fh
+
+    def _open_frozen_file(self, path, flags, ftag_path):
+        # Logic to open a frozen file based on .ftag
+        print(f'Opening frozen file: {path} with .ftag: {ftag_path}')
+        # Implement the logic to open and handle frozen files
+        # Placeholder: Implement this method based on your handling of frozen files
+
+    def _open_regular_file(self, path, flags):
+        # Logic to open a regular file
+        os_fh = os.open(os.path.join(self.directory, path.lstrip('/')), flags)
+        mode = 'rb' if flags & os.O_RDONLY else 'wb' if flags & os.O_WRONLY else 'r+b'
+        file_obj = os.fdopen(os_fh, mode)
+        self.fh_map[os_fh] = (file_obj, None)
         return os_fh
 
     def read(self, path, length, offset, fh):
@@ -527,27 +605,28 @@ class FreezeFS(Operations, FileSystemEventHandler):
 
         self._log_verbose(f'moved: {src} to {dst}')
 
-        if src.suffix.lower() == '.ftag':
-            self._purge_ftag(src, force=True)
+        if self.transparent:
+            if src.suffix.lower() == '.ftag':
+                self._purge_ftag(src, force=True)
 
-            freezetag_map = self.freezetag_map.get(src)
-            if not freezetag_map:
-                for tag in self.inactive_freezetags:
-                    if tag[1] == src:
-                        tag[1] = dst
-                        break
+                freezetag_map = self.freezetag_map.get(src)
+                if not freezetag_map:
+                    for tag in self.inactive_freezetags:
+                        if tag[1] == src:
+                            tag[1] = dst
+                            break
+                    return
+
+                del self.freezetag_map[src]
+                self.freezetag_map[dst] = freezetag_map
+
+                for checksum in freezetag_map[1]:
+                    item = self.checksum_map[checksum]
+                    for entry in item.freezetags:
+                        if entry.freezetag_path == src:
+                            entry.freezetag_path = dst
+                            break
                 return
-
-            del self.freezetag_map[src]
-            self.freezetag_map[dst] = freezetag_map
-
-            for checksum in freezetag_map[1]:
-                item = self.checksum_map[checksum]
-                for entry in item.freezetags:
-                    if entry.freezetag_path == src:
-                        entry.freezetag_path = dst
-                        break
-            return
 
         item = self.abs_path_map[src]
         del self.abs_path_map[src]
@@ -562,14 +641,44 @@ class FreezeFS(Operations, FileSystemEventHandler):
         if path.is_dir():
             return
 
-        if path.suffix.lower() == '.ftag':
-            self._add_ftag(path)
-            return
+        if self.transparent:
+            if path.suffix.lower() == '.ftag':
+                self._add_ftag(path)
+                return
 
         self._add_file(path)
 
     def on_deleted(self, event):
         path = Path(event.src_path)
+
+        if self.transparent:
+            if path.suffix.lower() == '.ftag':
+                self._log_verbose(f'Deleting freezetag {path}')
+                self._purge_ftag(path, force=True)
+
+                freezetag_map = self.freezetag_map.get(path)
+                if freezetag_map:
+                    # Remove the freezetag from the map and update the checksum map
+                    for checksum in freezetag_map[1]:
+                        item = self.checksum_map[checksum]
+                        for entry in item.freezetags:
+                            if entry.freezetag_path == path:
+                                item.freezetags.remove(entry)
+                                self._delete_if_dangling(item, fuse_path=entry.path, file_path=None)
+                                break
+                    del self.freezetag_map[path]
+                else:
+                    # Handle cases where the freezetag map does not exist
+                    for tag in self.inactive_freezetags:
+                        if tag[1] == path:
+                            self.inactive_freezetags.remove(tag)
+                            break
+                return
+
+            # Check if the path is a frozen file
+            if any(ftag.path == path for ftag in self.freezetag_map.values()):
+                self._log_verbose(f'Attempt to delete frozen file {path} blocked')
+                return  # Block deletion of frozen files
 
         if path.suffix.lower() != '.ftag':
             self._log_verbose(f'deleting file {path}')
@@ -583,39 +692,30 @@ class FreezeFS(Operations, FileSystemEventHandler):
                     item.files.remove(entry)
                     self._delete_if_dangling(item, fuse_path=None, file_path=path)
                     break
-            return
 
-        self._log_verbose(f'deleting freezetag {path}')
+def on_modified(self, event):
+    src = Path(event.src_path)
 
-        self._purge_ftag(path, force=True)
+    # Check if the file has a corresponding .ftag file
+    ftag_path = src.with_suffix('.ftag')
+    has_ftag = ftag_path.exists()
 
-        freezetag_map = self.freezetag_map.get(path)
-        if not freezetag_map:
-            for tag in self.inactive_freezetags:
-                if tag[1] == path:
-                    self.inactive_freezetags.remove(tag)
-                    break
-            return
-
-        for checksum in freezetag_map[1]:
-            item = self.checksum_map[checksum]
-            for entry in item.freezetags:
-                if entry.freezetag_path == path:
-                    item.freezetags.remove(entry)
-                    self._delete_if_dangling(item, fuse_path=entry.path, file_path=None)
-                    break
-        del self.freezetag_map[path]
-
-        root = freezetag_map[0]
-        for tag in self.inactive_freezetags:
-            if tag[0] == root:
-                self.inactive_freezetags.remove(tag)
-                self._add_ftag(tag[1])
-                break
-
-    def on_modified(self, event):
-        self.on_deleted(event)
-        self.on_created(event)
+    # Handle based on the mode
+    if self.transparent:
+        if has_ftag:
+            # In transparent mode, frozen files should not be modified
+            self._log_verbose(f'Attempt to modify frozen file {src} blocked in transparent mode')
+        else:
+            # Apply changes to non-frozen files
+            self.on_deleted(event)
+            self.on_created(event)
+    else:
+        # In original freezetag mode, modifications to frozen files are not allowed
+        if has_ftag:
+            self._log_verbose(f'Attempt to modify frozen file {src} blocked in original freezetag mode')
+        else:
+            # Non-frozen files are not typically handled in original mode, but let's log if this happens
+            self._log_verbose(f'Non-frozen file {src} modified in original freezetag mode')
 
 
 def walk_dir(path):
@@ -623,3 +723,4 @@ def walk_dir(path):
         dirnames.sort()
         for filename in sorted(filenames):
             yield Path(dirpath) / filename
+
