@@ -67,6 +67,13 @@ def parse_args():
                             '\nIf a directory is specified, the default name remains.'
                             '\nOtherwise, a custom directory and filename will be respected.')
     mount.add_argument('--write-dir', '-wd', action='store_true', help='Redirect writes to source.')
+    mount.add_argument('--transparent', '-t', action='store_true',
+                       help='Transparently mount the freezetag directory. By default, everything appears'
+                            ' as in the source directory, except for content matched with .ftag files,'
+                            ' which will show the frozen versions.'
+                            '\n\nThis means that while the mount is "live" and reflects most current changes,'
+                            ' any content that has a corresponding .ftag file will be presented in its'
+                            ' frozen state, as per the .ftag data.')
 
     shave = add_subparser('shave', 'Strip metadata from all music files.',
                           '\n\nOnly music files with supported extensions (.mp3, .flac) will be modified,'

@@ -425,8 +425,10 @@ def show(path, as_json, **kwargs):
         for f in frozen.files:
             print(f'{f.checksum.hex()} {f.path}')
 
-def mount(directory, mount_point, verbose, db_path=None, write_dir=None, **kwargs):
+def mount(directory, mount_point, verbose, db_path=None, write_dir=None, transparent=False, **kwargs):
     from .freezefs import FreezeFS
     if write_dir:
         print(f"Write redirection is enabled to {write_dir}")
-    FreezeFS(verbose, db_path=db_path, write_dir=write_dir).mount(directory, mount_point)
+    if transparent:
+        print(f"Transparent mode is enabled")
+    FreezeFS(verbose, db_path=db_path, write_dir=write_dir, transparent=transparent).mount(directory, mount_point)
