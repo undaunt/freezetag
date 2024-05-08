@@ -364,14 +364,30 @@ class FreezeFS(Operations, FileSystemEventHandler):
         if not self.write_dir:
             raise FuseOSError(errno.EROFS)  # Read-only file system error
 
-        # Retrieve the file object from fh_map using the file handle
         file_obj, _ = self.fh_map.get(fh, (None, None))
         if file_obj is None:
-            raise FuseOSError(errno.EBADF)  # Bad file descriptor error
+            actual_path = os.path.join(self.directory, path.lstrip('/'))
+            try:
+                file_obj = open(actual_path, 'r+b')
+                self.fh_map[fh] = (file_obj, None)
+            except IOError:
+                raise FuseOSError(errno.EBADF)  # Handle file open errors
 
-        # Perform the write operation
-        file_obj.seek(offset)  # Move to the correct offset
-        return file_obj.write(data)  # Write data and return the number of bytes written
+        file_obj.seek(offset)
+        return file_obj.write(data)
+
+    def rename(self, old, new):
+        if not self.write_dir:
+            raise FuseOSError(errno.EROFS)
+
+        old_path = os.path.join(self.directory, old.lstrip('/'))
+        new_path = os.path.join(self.directory, new.lstrip('/'))
+        # Update fh_map to reflect new path
+        fh = next((k for k, v in self.fh_map.items() if v[1] == old_path), None)
+        if fh:
+            file_obj, _ = self.fh_map[fh]
+            self.fh_map[fh] = (file_obj, new_path)
+        os.rename(old_path, new_path)
 
     def getattr(self, path, fh=None):
         path = Path(path)
