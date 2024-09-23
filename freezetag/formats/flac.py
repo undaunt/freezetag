@@ -1,7 +1,6 @@
 from freezetag import base
 from construct import *
 
-
 BLOCK_TYPES = [
     'STREAMINFO',
     'PADDING',
@@ -10,7 +9,7 @@ BLOCK_TYPES = [
     'VORBIS_COMMENT',
     'CUESHEET',
     'PICTURE',
-]
+] + ['RESERVED'] * (127 - 7) + ['INVALID']
 
 MetadataFormat = Struct(
     'info' / BitStruct(
@@ -29,15 +28,19 @@ Format = Struct(
     'audio' / GreedyBytes,
 )
 
-
 class MusicMetadata(base.MusicMetadata):
     def __init__(self, value):
         super().__init__(FrozenMetadataFormat, value)
 
     def __iter__(self):
         for item in self.value:
-            yield BLOCK_TYPES[item.info.block_type], item.size + 4
-
+            block_type_index = item.info.block_type
+            try:
+                block_type = BLOCK_TYPES[block_type_index]
+            except IndexError:
+                # Handle unknown block types by assigning a placeholder
+                block_type = f'UNKNOWN_BLOCK_TYPE_{block_type_index}'
+            yield block_type, item.size + 4
 
 class ParsedFile(base.MusicParsedFile):
     def __init__(self, path):
@@ -57,7 +60,6 @@ class ParsedFile(base.MusicParsedFile):
         self.instance.metadata[0].info.last = not len(metadata)
         self.instance.metadata += metadata
 
-
 class FuseFile(base.FuseFile):
     def __init__(self, file_path, flags, metadata, file_metadata_info, file_metadata_len, frozen_metadata_len):
         super().__init__(file_path, flags, metadata, file_metadata_info, file_metadata_len, frozen_metadata_len)
@@ -66,7 +68,7 @@ class FuseFile(base.FuseFile):
         self._metadata_bytes = None
 
     def metadata_bytes(self):
-        if self._metadata_bytes == None:
+        if self._metadata_bytes is None:
             self._metadata_bytes = b''.join(MetadataFormat.build(m) for m in self.metadata)
         return self._metadata_bytes
 
