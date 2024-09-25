@@ -22,8 +22,8 @@ try:
     from fuse import FUSE, FuseOSError, Operations
 except ImportError:
     fuse_urls = {
-        'Darwin': 'Install it via homebrew by running "brew install macfuse", or manually from https://osxfuse.github.io/',
-        'Linux': 'Install fuse2 from your package manager, or manually from https://github.com/libfuse/libfuse/releases/latest.',
+        'Darwin': 'Install it via Homebrew by running "brew install macfuse", or manually from https://osxfuse.github.io/',
+        'Linux': 'Install FUSE from your package manager, or manually from https://github.com/libfuse/libfuse/releases/latest.',
         'Windows': 'Download and install it from https://github.com/billziss-gh/winfsp/releases/latest.',
     }
     print('Could not load FUSE.', file=sys.stderr)
@@ -87,7 +87,10 @@ class FrozenItem:
 
 
 class FreezeFS(Operations, FileSystemEventHandler):
-    def __init__(self, verbose=False, db_path=None):
+    def __init__(self, verbose=False, db_path=None, uid=None, gid=None):
+        self.uid = uid if uid is not None else os.getuid()
+        self.gid = gid if gid is not None else os.getgid()
+
         self.path_map = {Path('/').root: {}}
         self.checksum_map = {}
         self.abs_path_map = {}
@@ -122,22 +125,14 @@ class FreezeFS(Operations, FileSystemEventHandler):
 
         now = time.time()
 
-        try:
-            gid = os.getgid()
-            uid = os.getuid()
-        except AttributeError:
-            # Windows does not have os.getuid()
-            gid = 0
-            uid = 0
-
         dir_stat_items = {
             'st_atime': now,
             'st_ctime': now,
             'st_mtime': now,
             'st_mode': S_IFDIR | 0o755,
             'st_nlink': 2,
-            'st_gid': gid,
-            'st_uid': uid,
+            'st_gid': self.gid,
+            'st_uid': self.uid,
         }
 
         if platform.system() == 'Darwin':
@@ -145,16 +140,7 @@ class FreezeFS(Operations, FileSystemEventHandler):
 
         self.dir_stat = dir_stat_items
 
-    def mount(self, directory, mount_point, uid=None, gid=None, allow_other=False):
-        if uid is None:
-            uid = os.getuid()
-        if gid is None:
-            gid = os.getgid()
-
-        db_path = Path(self.db_path)  # Ensure db_path is a Path object
-        db_dir = db_path.parent
-        db_dir.mkdir(parents=True, exist_ok=True)  # Ensure the directory exists
-
+    def mount(self, directory, mount_point, allow_other=False):
         observer = Observer()
         observer.schedule(self, directory, recursive=True)
         observer.start()
@@ -169,19 +155,15 @@ class FreezeFS(Operations, FileSystemEventHandler):
 
         print(f'Mounting {mount_point}')
 
-        mount_opts = [f'uid={uid}', f'gid={gid}']
-
-        # Include 'allow_other' if needed
-        if allow_other:
-            mount_opts.append('allow_other')
-
         fuse_args = {
             'nothreads': True,
             'foreground': True,
             'fsname': 'freezefs',
             'volname': Path(mount_point).name,
-            'options': ','.join(mount_opts),
         }
+
+        if allow_other:
+            fuse_args['allow_other'] = True
 
         # Only macOS supports FUSE volume names; remove it for other OSes
         if platform.system() != 'Darwin':
@@ -382,11 +364,17 @@ class FreezeFS(Operations, FileSystemEventHandler):
                 raise FuseOSError(ENOENT)
 
             st = file_entry.path.stat()
-            d = {key: getattr(st, key) for key in ST_ITEMS}
+            d = {key: getattr(st, key) for key in ST_ITEMS if hasattr(st, key)}
             d['st_size'] += frozen_entry.metadata_len - file_entry.metadata_len
+            d['st_uid'] = self.uid
+            d['st_gid'] = self.gid
             return d
 
-        return self.dir_stat
+        # For directories
+        d = self.dir_stat.copy()
+        d['st_uid'] = self.uid
+        d['st_gid'] = self.gid
+        return d
 
     def readdir(self, path, fh):
         yield '.'
