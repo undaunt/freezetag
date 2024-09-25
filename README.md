@@ -294,6 +294,10 @@ If you use a custom naming scheme for your freezetags (by passing `--ftag` to `f
 
 Changelog
 ---------
+### [1.4.0] - 2024-09-20
+* Added support for `--uid`, `--gid`, and `--allow-other` options.
+* Integrated fixes from pull requests to upstream master.
+* Fixed metadata handling for Python 3.7 and above.
 ### [1.3.1] - 2024-05-07
 * Pulled [@CoordSpace](https://github.com/CoordSpace)'s volname & FUSE support fix - fixes Linux support for mount.
 ### [1.3.0] - 2024-05-07

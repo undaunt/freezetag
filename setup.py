@@ -5,7 +5,7 @@ with open("README.md", "r") as fh:
 
 setuptools.setup(
     name="freezetag",
-    version="1.3.0",
+    version="1.4.0",
     author="x1ppy",
     author_email="",
     packages=[
