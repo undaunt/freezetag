@@ -421,9 +421,7 @@ def show(path, as_json, **kwargs):
             print(f'{f.checksum.hex()} {f.path}')
 
 
-def mount(directory, mount_point, verbose, db_path=None, uid=None, gid=None, **kwargs):
+def mount(directory, mount_point, verbose, db_path=None, uid=None, gid=None, allow_other=False, **kwargs):
     from .freezefs import FreezeFS
     fs = FreezeFS(verbose, db_path=db_path, uid=uid, gid=gid)
-    fs.mount(directory, mount_point)
-
-
+    fs.mount(directory, mount_point, allow_other=allow_other)

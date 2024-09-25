@@ -103,18 +103,20 @@ def parse_args():
         ),
     )
     mount.add_argument(
+        '--allow-other',
+        action='store_true',
+        help='Allow other users to access the mounted filesystem.',
+    )
+    mount.add_argument(
         '--uid',
         type=int,
-        default=None,
-        help='Set the UID for the mounted filesystem. Default is the current user UID.',
+        help='Set the owner (user ID) of the mounted files.',
     )
     mount.add_argument(
         '--gid',
         type=int,
-        default=None,
-        help='Set the GID for the mounted filesystem. Default is the current user GID.',
+        help='Set the group (group ID) of the mounted files.',
     )
-
     show.add_argument(
         'path',
         nargs='?',
