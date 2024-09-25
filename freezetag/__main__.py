@@ -114,11 +114,6 @@ def parse_args():
         default=None,
         help='Set the GID for the mounted filesystem. Default is the current user GID.',
     )
-    mount.add_argument(
-        '--allow-other',
-        action='store_true',
-        help='Allow other users to access the mounted filesystem.',
-    )
 
     show.add_argument(
         'path',
