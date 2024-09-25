@@ -140,7 +140,7 @@ class FreezeFS(Operations, FileSystemEventHandler):
 
         self.dir_stat = dir_stat_items
 
-    def mount(self, directory, mount_point):
+    def mount(self, directory, mount_point, allow_other=False):
         observer = Observer()
         observer.schedule(self, directory, recursive=True)
         observer.start()
@@ -165,6 +165,10 @@ class FreezeFS(Operations, FileSystemEventHandler):
         # Only macOS supports FUSE volume names; remove it for other OSes
         if platform.system() != 'Darwin':
             fuse_args.pop('volname', None)
+
+        # Add support for fuse allow_other
+        if allow_other:
+            fuse_args['allow_other'] = True
 
         self._log_verbose(f'Mounting FUSE with these args: {fuse_args}')
         FUSE(self, mount_point, **fuse_args)
