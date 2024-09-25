@@ -11,9 +11,7 @@ from pathlib import Path
 from .base import ParsedFile, MusicMetadata
 from .core import Freezetag
 
-# Version 2 is used only for "freeze --backup" freezetags.
-# All other freezetags are still created using version 1 so the bytes/IDs stay consistent.
-# These can be unified in a future version if the schema is updated.
+# Version constants
 DEFAULT_VERSION = 1
 VERSION = 2
 
@@ -35,7 +33,7 @@ def get_mode(is_backup):
     return BACKUP_MODE if is_backup else DEFAULT_MODE
 
 
-class Reprinter():
+class Reprinter:
     def __init__(self):
         self.last_width = 0
 
@@ -284,9 +282,6 @@ def freeze(directory, backup, ftag, **kwargs):
 
     tmp_paths = [p for p in root.iterdir() if p.suffix.lower() == '.ftag-tmp']
 
-    # We're trying to create a new freeze state, but we found existing freezetag tmp
-    # directories. We almost certainly don't want tmp directories to be frozen, so
-    # abort and have the user fix it first.
     if len(tmp_paths):
         raise CommandException(
             f'Unrestored freezetag data found at {tmp_paths[0]}.\n'
@@ -324,7 +319,7 @@ def freeze(directory, backup, ftag, **kwargs):
             stat = os.stat(path)
             state = existing[str(rel_path)]
             if stat.st_size == state.stat.size and abs(stat.st_mtime - state.stat.mtime) < 1e-3:
-                files.append(f)
+                files.append(state)
                 existing_path_count += 1
                 metadata = MusicMetadata.from_state(state)
                 checksum = state.checksum
@@ -425,6 +420,8 @@ def show(path, as_json, **kwargs):
         for f in frozen.files:
             print(f'{f.checksum.hex()} {f.path}')
 
-def mount(directory, mount_point, verbose, db_path=None, **kwargs):
+
+def mount(directory, mount_point, verbose, db_path=None, uid=None, gid=None, allow_other=False, **kwargs):
     from .freezefs import FreezeFS
-    FreezeFS(verbose, db_path=db_path).mount(directory, mount_point)
+    fs = FreezeFS(verbose, db_path=db_path)
+    fs.mount(directory, mount_point, uid=uid, gid=gid, allow_other=allow_other)
