@@ -277,13 +277,17 @@ class FreezeFS(Operations, FileSystemEventHandler):
 
         try:
             metadata = file.strip()
+            metadata_info = list(metadata) if metadata else []
+            metadata_len = sum(m[1] for m in metadata_info) if metadata else 0
+            checksum = file.checksum()
+        except FileNotFoundError:
+            # File was deleted between stat() and here - just skip it
+            self._log_verbose(f'File disappeared while adding: {src}')
+            return
         except Exception as e:
-            print(f'Cannot strip metadata from file: {src}, error: {e}')
-            metadata = None
+            print(f'Cannot process file: {src}, error: {e}')
+            return
 
-        metadata_info = list(metadata) if metadata else []
-        metadata_len = sum(m[1] for m in metadata_info) if metadata else 0
-        checksum = file.checksum()
         entry = FrozenItemFileEntry(src, metadata_info, metadata_len)
         self.checksum_db.add(st.st_dev, st.st_ino, st.st_mtime, checksum, metadata_info, metadata_len)
         self._add_path_entry(checksum, entry)
@@ -512,8 +516,12 @@ class FreezeFS(Operations, FileSystemEventHandler):
     def on_moved(self, event):
         src = Path(event.src_path)
         dst = Path(event.dest_path)
-        if dst.is_dir():
-            return
+        try:
+            if dst.is_dir():
+                return
+        except OSError:
+            # Destination may not exist yet in some race conditions
+            pass
 
         self._log_verbose(f'Moved: {src} to {dst}')
 
@@ -539,7 +547,9 @@ class FreezeFS(Operations, FileSystemEventHandler):
                         break
             return
 
-        item = self.abs_path_map[src]
+        item = self.abs_path_map.get(src)
+        if not item:
+            return
         del self.abs_path_map[src]
         self.abs_path_map[dst] = item
 
@@ -549,7 +559,10 @@ class FreezeFS(Operations, FileSystemEventHandler):
 
     def on_created(self, event):
         path = Path(event.src_path)
-        if path.is_dir():
+        try:
+            if path.is_dir():
+                return
+        except OSError:
             return
 
         if path.suffix.lower() == '.ftag':
