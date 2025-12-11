@@ -307,6 +307,22 @@ class FreezeFS(Operations, FileSystemEventHandler):
         if file_path and not len(item.files):
             del self.abs_path_map[file_path]
 
+    def _get_valid_file_entry(self, item):
+        """
+        Get a valid (still-existing) file entry from the item.
+        If the first file is missing, removes it and returns None.
+        """
+        if not item.files:
+            return None
+        file_entry = item.files[0]
+        if file_entry.path.exists():
+            return file_entry
+        # File missing - clean up and return None
+        self._log_verbose(f'Source file missing, removing: {file_entry.path}')
+        item.files.remove(file_entry)
+        self._delete_if_dangling(item, fuse_path=None, file_path=file_entry.path)
+        return None
+
     def _can_purge_ftag(self, path):
         assert self.freezetag_ref_lock.locked()
 
@@ -354,7 +370,10 @@ class FreezeFS(Operations, FileSystemEventHandler):
             if not len(item.freezetags) or not len(item.files):
                 raise FuseOSError(ENOENT)
 
-            file_entry = item.files[0]
+            file_entry = self._get_valid_file_entry(item)
+            if file_entry is None:
+                raise FuseOSError(ENOENT)
+
             frozen_entry = None
             for entry in item.freezetags:
                 if entry.path == path:
@@ -364,7 +383,15 @@ class FreezeFS(Operations, FileSystemEventHandler):
             if not frozen_entry:
                 raise FuseOSError(ENOENT)
 
-            st = file_entry.path.stat()
+            try:
+                st = file_entry.path.stat()
+            except FileNotFoundError:
+                # Race condition: file deleted between exists() and stat()
+                self._log_verbose(f'File deleted during getattr: {file_entry.path}')
+                item.files.remove(file_entry)
+                self._delete_if_dangling(item, fuse_path=None, file_path=file_entry.path)
+                raise FuseOSError(ENOENT)
+
             d = {key: getattr(st, key) for key in ST_ITEMS if hasattr(st, key)}
             d['st_size'] += frozen_entry.metadata_len - file_entry.metadata_len
             d['st_uid'] = self.uid
@@ -395,7 +422,9 @@ class FreezeFS(Operations, FileSystemEventHandler):
             raise FuseOSError(ENOENT)
 
         # As long as the raw checksum matches, any file should work, so just use the first one we have.
-        file_entry = item.files[0]
+        file_entry = self._get_valid_file_entry(item)
+        if file_entry is None:
+            raise FuseOSError(ENOENT)
 
         frozen_entry = None
         for entry in item.freezetags:
@@ -434,14 +463,29 @@ class FreezeFS(Operations, FileSystemEventHandler):
                         break
                     self._log_verbose(f'ignoring {f.path} despite matching checksum (target: {target_path})')
 
-        file = FuseFile.from_info(
-            file_entry.path,
-            flags,
-            metadata,
-            file_entry.metadata_info,
-            file_entry.metadata_len,
-            frozen_entry.metadata_len,
-        )
+        try:
+            file = FuseFile.from_info(
+                file_entry.path,
+                flags,
+                metadata,
+                file_entry.metadata_info,
+                file_entry.metadata_len,
+                frozen_entry.metadata_len,
+            )
+        except FileNotFoundError:
+            # Race condition: file deleted between exists() check and open()
+            self._log_verbose(f'File deleted during open: {file_entry.path}')
+            item.files.remove(file_entry)
+            self._delete_if_dangling(item, fuse_path=None, file_path=file_entry.path)
+            if freezetag_path:
+                self.freezetag_ref_lock.acquire()
+                try:
+                    self.freezetag_refs[freezetag_path][1] -= 1
+                    self._schedule_purge_ftag(freezetag_path)
+                finally:
+                    self.freezetag_ref_lock.release()
+            raise FuseOSError(ENOENT)
+
         self.fh_map[file.fh] = (file, freezetag_path)
         return file.fh
 
